@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 const { WebSocketServer } = require("ws");
-const http = require("http")
-const map = require("lib0/map")
+const http = require("http");
+const map = require("lib0/map");
+map = map.map;
 
 const wsReadyStateConnecting = 0;
 const wsReadyStateOpen = 1;
@@ -95,11 +96,18 @@ const onconnection = (conn) => {
               (topicName) => {
                 if (typeof topicName === "string") {
                   // add conn to topic
-                  const topic = map.setIfUndefined(
-                    topics,
-                    topicName,
-                    () => new Set()
-                  );
+                  let topic;
+                  if (!topics.has(topicName)) {
+                    topic = new Set();
+                    topics.set(topicName, topic);
+                  } else {
+                    topic = topics.get(topicName);
+                  }
+                  // const topic = map.setIfUndefined(
+                  //   topics,
+                  //   topicName,
+                  //   () => new Set()
+                  // );
                   topic.add(conn);
                   // add topic to conn
                   subscribedTopics.add(topicName);
