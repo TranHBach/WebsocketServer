@@ -1,0 +1,16 @@
+{
+  "name": "signalingserver",
+  "version": "1.0.0",
+  "description": "",
+  "main": "newServer.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node newServer.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "lib0": "^0.2.94",
+    "ws": "^8.17.0"
+  }
+}
