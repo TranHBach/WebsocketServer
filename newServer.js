@@ -1,30 +1,25 @@
 const { WebSocketServer } = require("ws");
 const http = require("http");
-const libMap = require("lib0/map");
 
-const CONNECTION_STATE_CONNECTING = 0;
-const CONNECTION_STATE_OPEN = 1;
-
-const RECEIVED_PING_INTERVAL = 30000;
-
-const PORT = 4444;
+const SERVER_PORT = 4444;
 const webSocketServer = new WebSocketServer({ noServer: true });
 
 const httpServer = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
   res.end("okay");
 });
-const topicSubscribers = new Map();
+
+const topicSubscriptions = new Map();
 const sendMessage = (connection, message) => {
   if (
-    connection.readyState !== CONNECTION_STATE_CONNECTING &&
-    connection.readyState !== CONNECTION_STATE_OPEN
+    connection.readyState !== 0 &&
+    connection.readyState !== 1
   ) {
     connection.close();
   }
   try {
     connection.send(JSON.stringify(message));
-  } catch (err) {
+  } catch (error) {
     connection.close();
   }
 };
@@ -32,29 +27,31 @@ const handleConnection = (connection) => {
   const subscribedTopics = new Set();
   let isClosed = false;
   let pongReceived = true;
-  const pingCheckInterval = setInterval(() => {
+
+  const pingInterval = setInterval(() => {
     if (!pongReceived) {
       connection.close();
-      clearInterval(pingCheckInterval);
+      clearInterval(pingInterval);
     } else {
       pongReceived = false;
       try {
         connection.ping();
-      } catch (err) {
+      } catch (error) {
         connection.close();
       }
     }
-  }, RECEIVED_PING_INTERVAL);
+  }, 30000);
+
   connection.on("pong", () => {
     pongReceived = true;
   });
 
   connection.on("close", () => {
     subscribedTopics.forEach((topic) => {
-      const subscribers = topicSubscribers.get(topic) || new Set();
+      const subscribers = topicSubscriptions.get(topic) || new Set();
       subscribers.delete(connection);
       if (subscribers.size === 0) {
-        topicSubscribers.delete(topic);
+        topicSubscriptions.delete(topic);
       }
     });
     subscribedTopics.clear();
@@ -70,19 +67,23 @@ const handleConnection = (connection) => {
         case "subscribe":
           (msg.topics || []).forEach((topic) => {
             if (typeof topic === "string") {
-              const subscribers = libMap.setIfUndefined(
-                topicSubscribers,
-                topic,
-                () => new Set()
-              );
+              let subscribers;
+              if (!topicSubscriptions.has(topic)) {
+                subscribers = new Set();
+                topicSubscriptions.set(topic, subscribers);
+              } else {
+                subscribers = topicSubscriptions.get(topic);
+              }
               subscribers.add(connection);
               subscribedTopics.add(topic);
+              console.log(topicSubscriptions);
+              // console.log(subscribedTopics);
             }
           });
           break;
         case "unsubscribe":
           (msg.topics || []).forEach((topic) => {
-            const subscribers = topicSubscribers.get(topic);
+            const subscribers = topicSubscriptions.get(topic);
             if (subscribers) {
               subscribers.delete(connection);
             }
@@ -90,10 +91,9 @@ const handleConnection = (connection) => {
           break;
         case "publish":
           if (msg.topic) {
-            const receivers = topicSubscribers.get(msg.topic);
+            const receivers = topicSubscriptions.get(msg.topic);
             if (receivers) {
               msg.clients = receivers.size;
-              console.log("Publishing message:", msg);
               receivers.forEach((receiver) => sendMessage(receiver, msg));
             }
           }
@@ -107,6 +107,13 @@ const handleConnection = (connection) => {
 
 webSocketServer.on("connection", handleConnection);
 
-httpServer.listen(PORT, () => {
-  console.log(`Websocket server runs on http://localhost:${PORT}`);
+httpServer.on("upgrade", (req, socket, head) => {
+  const handleAuth = (ws) => {
+    webSocketServer.emit("connection", ws, req);
+  };
+  webSocketServer.handleUpgrade(req, socket, head, handleAuth);
+});
+
+httpServer.listen(SERVER_PORT, () => {
+  console.log(`Signaling server running on http://localhost:${SERVER_PORT}`);
 });
