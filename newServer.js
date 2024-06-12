@@ -1,159 +1,112 @@
-#!/usr/bin/env node
-
 const { WebSocketServer } = require("ws");
 const http = require("http");
-const map = require("lib0/map");
-map = map.map;
+const libMap = require("lib0/map");
 
-const wsReadyStateConnecting = 0;
-const wsReadyStateOpen = 1;
-const wsReadyStateClosing = 2; // eslint-disable-line
-const wsReadyStateClosed = 3; // eslint-disable-line
+const CONNECTION_STATE_CONNECTING = 0;
+const CONNECTION_STATE_OPEN = 1;
 
-const pingTimeout = 30000;
+const RECEIVED_PING_INTERVAL = 30000;
 
-const port = process.env.PORT || 4444;
-const wss = new WebSocketServer({ noServer: true });
+const PORT = 4444;
+const webSocketServer = new WebSocketServer({ noServer: true });
 
-const server = http.createServer((request, response) => {
-  response.writeHead(200, { "Content-Type": "text/plain" });
-  response.end("okay");
+const httpServer = http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("okay");
 });
-
-/**
- * Map froms topic-name to set of subscribed clients.
- * @type {Map<string, Set<any>>}
- */
-const topics = new Map();
-
-/**
- * @param {any} conn
- * @param {object} message
- */
-const send = (conn, message) => {
+const topicSubscribers = new Map();
+const sendMessage = (connection, message) => {
   if (
-    conn.readyState !== wsReadyStateConnecting &&
-    conn.readyState !== wsReadyStateOpen
+    connection.readyState !== CONNECTION_STATE_CONNECTING &&
+    connection.readyState !== CONNECTION_STATE_OPEN
   ) {
-    conn.close();
+    connection.close();
   }
   try {
-    conn.send(JSON.stringify(message));
-  } catch (e) {
-    conn.close();
+    connection.send(JSON.stringify(message));
+  } catch (err) {
+    connection.close();
   }
 };
-
-/**
- * Setup a new client
- * @param {any} conn
- */
-const onconnection = (conn) => {
-  /**
-   * @type {Set<string>}
-   */
+const handleConnection = (connection) => {
   const subscribedTopics = new Set();
-  let closed = false;
-  // Check if connection is still alive
+  let isClosed = false;
   let pongReceived = true;
-  const pingInterval = setInterval(() => {
+  const pingCheckInterval = setInterval(() => {
     if (!pongReceived) {
-      conn.close();
-      clearInterval(pingInterval);
+      connection.close();
+      clearInterval(pingCheckInterval);
     } else {
       pongReceived = false;
       try {
-        conn.ping();
-      } catch (e) {
-        conn.close();
+        connection.ping();
+      } catch (err) {
+        connection.close();
       }
     }
-  }, pingTimeout);
-  conn.on("pong", () => {
+  }, RECEIVED_PING_INTERVAL);
+  connection.on("pong", () => {
     pongReceived = true;
   });
-  conn.on("close", () => {
-    subscribedTopics.forEach((topicName) => {
-      const subs = topics.get(topicName) || new Set();
-      subs.delete(conn);
-      if (subs.size === 0) {
-        topics.delete(topicName);
+
+  connection.on("close", () => {
+    subscribedTopics.forEach((topic) => {
+      const subscribers = topicSubscribers.get(topic) || new Set();
+      subscribers.delete(connection);
+      if (subscribers.size === 0) {
+        topicSubscribers.delete(topic);
       }
     });
     subscribedTopics.clear();
-    closed = true;
+    isClosed = true;
   });
-  conn.on(
-    "message",
-    /** @param {object} message */ (message) => {
-      if (typeof message === "string" || message instanceof Buffer) {
-        message = JSON.parse(message);
-      }
-      if (message && message.type && !closed) {
-        switch (message.type) {
-          case "subscribe":
-            /** @type {Array<string>} */ (message.topics || []).forEach(
-              (topicName) => {
-                if (typeof topicName === "string") {
-                  // add conn to topic
-                  let topic;
-                  if (!topics.has(topicName)) {
-                    topic = new Set();
-                    topics.set(topicName, topic);
-                  } else {
-                    topic = topics.get(topicName);
-                  }
-                  // const topic = map.setIfUndefined(
-                  //   topics,
-                  //   topicName,
-                  //   () => new Set()
-                  // );
-                  topic.add(conn);
-                  // add topic to conn
-                  subscribedTopics.add(topicName);
-                }
-              }
-            );
-            break;
-          case "unsubscribe":
-            /** @type {Array<string>} */ (message.topics || []).forEach(
-              (topicName) => {
-                const subs = topics.get(topicName);
-                if (subs) {
-                  subs.delete(conn);
-                }
-              }
-            );
-            break;
-          case "publish":
-            if (message.topic) {
-              const receivers = topics.get(message.topic);
-              if (receivers) {
-                message.clients = receivers.size;
-                receivers.forEach((receiver) => send(receiver, message));
-              }
+
+  connection.on("message", (msg) => {
+    if (typeof msg === "string" || msg instanceof Buffer) {
+      msg = JSON.parse(msg);
+    }
+    if (msg && msg.type && !isClosed) {
+      switch (msg.type) {
+        case "subscribe":
+          (msg.topics || []).forEach((topic) => {
+            if (typeof topic === "string") {
+              const subscribers = libMap.setIfUndefined(
+                topicSubscribers,
+                topic,
+                () => new Set()
+              );
+              subscribers.add(connection);
+              subscribedTopics.add(topic);
             }
-            break;
-          case "ping":
-            send(conn, { type: "pong" });
-        }
+          });
+          break;
+        case "unsubscribe":
+          (msg.topics || []).forEach((topic) => {
+            const subscribers = topicSubscribers.get(topic);
+            if (subscribers) {
+              subscribers.delete(connection);
+            }
+          });
+          break;
+        case "publish":
+          if (msg.topic) {
+            const receivers = topicSubscribers.get(msg.topic);
+            if (receivers) {
+              msg.clients = receivers.size;
+              console.log("Publishing message:", msg);
+              receivers.forEach((receiver) => sendMessage(receiver, msg));
+            }
+          }
+          break;
+        case "ping":
+          sendMessage(connection, { type: "pong" });
       }
     }
-  );
+  });
 };
-wss.on("connection", onconnection);
 
-server.on("upgrade", (request, socket, head) => {
-  // You may check auth of request here..
-  /**
-   * @param {any} ws
-   */
-  const handleAuth = (ws) => {
-    wss.emit("connection", ws, request);
-  };
-  wss.handleUpgrade(request, socket, head, handleAuth);
+webSocketServer.on("connection", handleConnection);
+
+httpServer.listen(PORT, () => {
+  console.log(`Websocket server runs on http://localhost:${PORT}`);
 });
-
-server.listen(port);
-
-console.log("Signaling server running on localhost:", port);
